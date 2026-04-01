@@ -1,0 +1,36 @@
+# ORCA intermediate/binary files
+*.gbw
+*.densities
+*.densitiesinfo
+*.engrad
+*.opt
+*.bibtex
+*.property.txt
+*_trj.xyz
+
+# Data directories (too large for GitHub)
+data/opt_inp/
+data/opt_out/
+data/freq_inp/
+data/freq_out/
+data/xyz/
+data/atom_ref/
+data/*.csv
+
+# SGE job output logs
+FE_*.o*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Results (generated)
+scripts/final_data_with_deltaG.csv
+tsne_plots/
+tsne_plots_with_background/
+*.png
