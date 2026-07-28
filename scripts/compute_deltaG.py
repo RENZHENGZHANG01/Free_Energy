@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 from rdkit import Chem
+from rdkit.Chem import Descriptors
 
 # =========================================================
 # Utility Functions
@@ -8,13 +9,15 @@ from rdkit import Chem
 
 def preprocess_smiles(smi: str):
     """Replace '*' with 'C' and return valid RDKit SMILES."""
-    if smi is None:
+    if smi is None or (isinstance(smi, float) and pd.isna(smi)):
         return None
-    return smi.replace("*", "C")
+    return str(smi).replace("*", "C")
 
 
 def count_atoms(smiles):
     """Return atom_counts dict including H."""
+    if smiles is None:
+        return None
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None
@@ -30,7 +33,9 @@ def count_atoms(smiles):
 
 
 def count_bonds(smiles):
-    """Return backbone bonds, total bonds, heavy atoms, total atoms."""
+    """Return backbone bonds, total bonds, heavy atoms, total atoms, CH_bonds."""
+    if smiles is None:
+        return None, None, None, None, None
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None, None, None, None, None
@@ -48,47 +53,40 @@ def count_bonds(smiles):
     return backbone_bonds, total_bonds, heavy_atoms, total_atoms, CH_bonds
 
 
+def compute_molecular_weight(smiles):
+    """Compute molecular weight from SMILES string."""
+    if smiles is None:
+        return None
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    return Descriptors.MolWt(mol)
+
+
 # =========================================================
 # Main ΔG Computation Pipeline
 # =========================================================
 
 def compute_deltaG():
 
-    # script/ → project_root/
-    root = os.path.dirname(os.path.dirname(__file__))
+    # All files are in the same directory as this script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # --- YOUR INPUT FILE IS HERE ---
-    input_csv = os.path.join(root, "data", "miss_point.csv")
+    # --- Input: the reordered file with mol, smiles, Gibbs_Eh, G_minus_Eel ---
+    input_csv = os.path.join(script_dir, "merged_G_raw.csv")
+    atom_ref_csv = os.path.join(script_dir, "atom_ref.csv")
 
-    atom_ref_csv = os.path.join(root, "data/atom_ref", "atom_ref.csv")
-    deltaG_raw_csv = os.path.join(root, "data", "deltaG_raw.csv")
-
-    print("Reading input SMILES file:", input_csv)
+    print("Reading input file:", input_csv)
     df = pd.read_csv(input_csv)
 
     print("Reading atom reference energy:", atom_ref_csv)
     atom_ref = pd.read_csv(atom_ref_csv)
     ref_dict = dict(zip(atom_ref["atom"], atom_ref["energy"]))
 
-    print("Reading Gibbs energies:", deltaG_raw_csv)
-    df_G = pd.read_csv(deltaG_raw_csv)
-
-    if "Gibbs_Eh" not in df_G.columns:
-        raise ValueError("deltaG_raw.csv missing column: Gibbs_Eh")
-
-    # --- FIX: sort PI order numerically ---
-    df_G["mol_index"] = df_G["mol"].apply(lambda x: int(x.replace("PI", "")))
-    df_G = df_G.sort_values("mol_index").reset_index(drop=True)
-    df_G = df_G.drop(columns=["mol_index"])
-
-    # Attach sorted Gibbs energy back to main df
-    df["Gibbs_Eh"] = df_G["Gibbs_Eh"]
-
-
     # =====================================================
-    # Clean SMILES
+    # Clean SMILES (* → C)
     # =====================================================
-    df["smiles_clean"] = df["smiles"].astype(str).apply(preprocess_smiles)
+    df["smiles_clean"] = df["smiles"].apply(preprocess_smiles)
 
     # =====================================================
     # Count atoms and bonds
@@ -99,7 +97,7 @@ def compute_deltaG():
     print("Counting atoms + bonds...")
 
     for i, smi in enumerate(df["smiles_clean"]):
-        if i % 20 == 0:
+        if i % 100 == 0:
             print(f"  → row {i}/{len(df)}")
 
         atom_counts = count_atoms(smi)
@@ -120,9 +118,17 @@ def compute_deltaG():
     df["CH_bonds"] = CH_list
 
     # =====================================================
+    # Compute molecular weight
+    # =====================================================
+    print("Computing molecular weights...")
+    df["MW"] = df["smiles_clean"].apply(compute_molecular_weight)
+
+    # =====================================================
     # Compute reference energy sum
     # =====================================================
     def compute_reference_energy(atom_dict):
+        if atom_dict is None:
+            return None
         total_ref_E = 0.0
         for atom, n in atom_dict.items():
             if atom not in ref_dict:
@@ -133,7 +139,7 @@ def compute_deltaG():
     df["E_ref_sum"] = df["atom_counts"].apply(compute_reference_energy)
 
     # =====================================================
-    # Compute ΔG
+    # Compute ΔG (only for rows that have Gibbs_Eh data)
     # =====================================================
     df["Delta_G"] = df["Gibbs_Eh"] - df["E_ref_sum"]
 
@@ -145,17 +151,34 @@ def compute_deltaG():
     df["DeltaG_per_backbone_bond"] = df["Delta_G"] / df["backbone_bonds"]
     df["DeltaG_per_bond"] = df["Delta_G"] / df["total_bonds"]
     df["DeltaG_per_CH"] = df["Delta_G"] / df["CH_bonds"]
+    df["Delta_G_per_MW"] = df["Delta_G"] / df["MW"]
+
+    # =====================================================
+    # Select output columns (drop intermediate atom_counts dict)
+    # =====================================================
+    output_cols = [
+        "mol", "smiles", "smiles_clean", "MW",
+        "Gibbs_Eh", "G_minus_Eel", "E_ref_sum", "Delta_G",
+        "heavy_atoms", "total_atoms", "backbone_bonds", "total_bonds", "CH_bonds",
+        "DeltaG_per_heavy_atom", "DeltaG_per_atom",
+        "DeltaG_per_backbone_bond", "DeltaG_per_bond", "DeltaG_per_CH",
+        "Delta_G_per_MW",
+    ]
+    df_out = df[output_cols]
 
     # =====================================================
     # Save output
     # =====================================================
-    output_csv = os.path.join(root, "final_data_with_deltaG.csv")
-    df.to_csv(output_csv, index=False)
+    output_csv = os.path.join(script_dir, "final_data_with_deltaG.csv")
+    df_out.to_csv(output_csv, index=False)
 
-    print("🎉 DONE! Saved to:", output_csv)
-    print(df.head())
+    print(f"\n🎉 DONE! Saved to: {output_csv}")
+    print(f"   Total rows: {len(df_out)}")
+    print(f"   Rows with Delta_G: {df_out['Delta_G'].notna().sum()}")
+    print(f"   Rows without Gibbs data: {df_out['Delta_G'].isna().sum()}")
+    print(df_out.head())
 
-    return df
+    return df_out
 
 
 # Run

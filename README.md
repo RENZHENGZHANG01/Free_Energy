@@ -134,17 +134,46 @@ PI3,*C(C*)CC
 
 > **Note:** The `*` symbols represent polymer repeat-unit attachment points and will be automatically replaced with `C` (methyl caps) during processing.
 
-Create `data/atom_ref/atom_ref.csv` with DFT atomic reference energies (in Hartree):
+Atomic reference energies live in **`scripts/atom_ref.csv`** (this is the path
+`compute_deltaG.py` reads) with columns `atom,energy` in Hartree:
 
 ```csv
 atom,energy
-C,-37.83815352
-H,-0.498764293
-O,-75.06688707
-N,-54.57900565
-S,-398.0714528
-F,-99.73630733
+C,-37.838153520821
+H,-0.498764293374
+O,-75.066887071071
+N,-54.579005649305
+...
 ```
+
+These are shipped with the repo for all 13 supported elements
+(H, C, N, O, F, Si, P, S, Cl, Ge, Br, Sn, I). **They must be computed with the same
+functional/basis as the molecules** (`B3LYP D3BJ def2-TZVP`), otherwise ΔG is
+meaningless — the atoms are subtracted from the molecular Gibbs energy.
+
+To regenerate them (e.g. to add an element, or to switch functional):
+
+```bash
+# 1. Write ORCA inputs for every atom (ground-state multiplicities are built in:
+#    H=2, C=3, N=4, O=3, F=2, Si=3, P=4, S=3, Cl=2, Ge=3, Br=2, Sn=3, I=2)
+python scripts/generate_atom_ref_inp.py
+
+# 2. Run them all (serial -- a single atom has ~10-30 basis functions, so MPI
+#    parallelism is counter-productive; the inputs deliberately contain no %pal)
+qsub submit_atom_ref.csh
+
+# 3. Parse -> data/atom_ref/atom_ref_{b3lyp,wb97x}.csv, then write the production file
+python scripts/parse_atom_ref.py --write-production --use E
+```
+
+`parse_atom_ref.py` prints an old-vs-new comparison and refuses to write if any
+energy failed to parse. It defaults to the **electronic** energy (`--use E`) to stay
+consistent with the existing table; `--use G` would switch to Gibbs and shift every
+molecule's ΔG by a per-element constant.
+
+`scripts/compare_atom_ref_methods.py` quantifies the difference between two
+functional sets (a `wB97X-D3/def2-TZVPPD` set is generated alongside B3LYP for
+comparison — **do not mix the two**).
 
 ### 1. Generate 3D XYZ Coordinates
 

@@ -1,7 +1,7 @@
 #!/bin/bash
-file_path="data/miss_point.csv"   # CSV 第一列是 molecule ID
-start=2                 # 从第几行开始（如跳过表头就设为 2）
-number=55           # 最多提交多少个
+file_path="data/round1.csv"   # CSV 第一列是 molecule ID
+start=29                 # 从第几行开始（如跳过表头就设为 2）
+number=1           # 最多提交多少个
 
 count=0
 submitted=0

@@ -81,11 +81,11 @@ echo "FREQ: $MOL"
 #################################
 # 7. EXTRACT THERMO
 #################################
-python scripts/extract_thermo.py --mol $MOL
+# python scripts/extract_thermo.py --mol $MOL
 
 #################################
 # 8. COMPUTE DELTA G
 #################################
-python scripts/compute_deltaG.py --mol $MOL
+# python scripts/compute_deltaG.py --mol $MOL
 
 echo "🎉 FINISHED FREE ENERGY FOR $MOL"
