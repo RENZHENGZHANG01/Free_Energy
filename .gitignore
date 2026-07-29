@@ -31,6 +31,8 @@ Thumbs.db
 
 # Results (generated)
 scripts/final_data_with_deltaG.csv
+scripts/final_data_with_residual_deltaG.csv
+scripts/residual_plots/
 tsne_plots/
 tsne_plots_with_background/
 *.png

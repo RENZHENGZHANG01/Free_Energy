@@ -29,11 +29,27 @@ An automated computational chemistry pipeline for calculating **Gibbs free energ
 │  │  ┌──────────────────┐    ┌──────────────────────┐ │                  │
 │  │  │  Extract Gibbs   │───▶│  Compute ΔG with     │ │                  │
 │  │  │  Free Energy     │    │  Atomization Ref     │ │                  │
-│  │  └──────────────────┘    └──────────────────────┘ │                  │
-│  └───────────────────────────────────────────────────┘                  │
+│  │  └──────────────────┘    └───────────┬──────────┘ │                  │
+│  └────────────────────────────────────────┼──────────┘                  │
+│                                            ▼                             │
+│                        ┌────────────────────────────────────┐            │
+│                        │  Step 6: FS5 + Ridge baseline      │            │
+│                        │  ΔG_residual = ΔG − f(composition) │            │
+│                        │  → SIZE-INDEPENDENT stability      │            │
+│                        └────────────────────────────────────┘            │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Why Step 6 matters.** Raw ΔG scales ~linearly with molecule size, so it cannot be
+compared across molecules of different size, and it is useless as a reward/guidance
+signal (it would just favour bigger or smaller molecules). Step 6 subtracts a linear
+composition baseline (FS5: element counts + bond-element-pair × bond-type counts +
+ring size × aromaticity, fitted with Ridge), leaving a **size-independent measure of
+thermodynamic stability**. On the full dataset the residual has r(size) ≈ −0.001
+while retaining a σ ≈ 8.9 kcal/mol structural signal. See the module docstring of
+`scripts/compute_residual_deltaG.py` for the feature-set comparison that selected FS5
+and for why nonlinear baselines are rejected.
 
 ---
 
@@ -46,14 +62,22 @@ Free_Energy/
 │
 ├── submit_free_energy.csh             # SGE job script (runs full pipeline for ONE molecule)
 ├── full_submit_free_energy.sh         # Batch submission wrapper (submits all molecules)
+├── submit_atom_ref.csh                # SGE job: single-atom reference energies
 │
 ├── scripts/                           # Python scripts for each pipeline step
 │   ├── generate_xyz.py                # Step 0: SMILES → 3D XYZ coordinates
 │   ├── generate_step1_opt_inp.py      # Step 1: Generate PBE optimization inputs
 │   ├── generate_step2_opt_inp_from_xyz.py  # Step 2: Generate B3LYP optimization inputs
 │   ├── generate_freq_inp.py           # Step 3: Generate frequency calculation inputs
-│   ├── extract_thermo.py             # Step 4: Extract Gibbs energies from output
-│   ├── compute_deltaG.py             # Step 5: Compute ΔG with atomization reference
+│   ├── extract_thermo.py              # Step 4: Extract Gibbs energies from output
+│   ├── compute_deltaG.py              # Step 5: Compute ΔG with atomization reference
+│   ├── compute_residual_deltaG.py     # Step 6: FS5+Ridge → SIZE-INDEPENDENT ΔG residual
+│   │
+│   ├── atom_ref.csv                   # Atomic reference energies USED BY STEP 5 (required)
+│   ├── generate_atom_ref_inp.py       # Generate single-atom ORCA inputs (13 elements × 2 methods)
+│   ├── parse_atom_ref.py              # Parse those outputs → atom_ref.csv
+│   ├── compare_atom_ref_methods.py    # Compare B3LYP-D3BJ vs ωB97X-D3 reference sets
+│   │
 │   ├── bond_count.py                  # Utility: count backbone/total bonds
 │   ├── plot.py                        # Analysis: scatter plots of ΔG vs atom count
 │   ├── tsne.py                        # Analysis: t-SNE visualization of molecules
@@ -224,11 +248,18 @@ bash full_submit_free_energy.sh
 After all jobs complete:
 
 ```bash
-# Extract thermodynamic data from frequency outputs
+# Step 4 — extract thermodynamic data from frequency outputs
+#          → scripts/merged_G_raw.csv
 python scripts/extract_thermo.py
 
-# Compute atomization ΔG for all molecules
+# Step 5 — atomization ΔG for all molecules (needs scripts/atom_ref.csv)
+#          → scripts/final_data_with_deltaG.csv
 python scripts/compute_deltaG.py
+
+# Step 6 — size-independent residual (FS5 + Ridge). THIS is the quantity to
+#          compare across molecules or feed to an ML / generative model.
+#          → scripts/final_data_with_residual_deltaG.csv + scripts/residual_plots/
+python scripts/compute_residual_deltaG.py
 
 # Generate scatter plots
 python scripts/plot.py
@@ -311,7 +342,10 @@ After a complete pipeline run, the final results are saved to:
 
 | File | Description |
 |---|---|
-| `scripts/final_data_with_deltaG.csv` | Full dataset with SMILES, atom counts, bond counts, Gibbs energy, ΔG, and all normalized metrics |
+| `scripts/merged_G_raw.csv` | Step 4 output: `mol, smiles, Gibbs_Eh, G_minus_Eel` (intermediate) |
+| `scripts/final_data_with_deltaG.csv` | Step 5 output: SMILES, atom/bond counts, Gibbs energy, **ΔG** and all normalized metrics |
+| `scripts/final_data_with_residual_deltaG.csv` | **Step 6 output — the main result.** Adds `Delta_G_predicted` (FS5 Ridge baseline) and **`Delta_G_residual`**, the size-independent stability signal, in kcal/mol. Net-charged molecules get `NaN` residual (the DFT pipeline assumes neutral singlets) so downstream `dropna()` excludes them |
+| `scripts/residual_plots/` | Step 6 diagnostics: residual vs atom count / MW (both should be ≈ flat), parity plots, residual histogram |
 | `data/deltaG_raw.csv` | Raw extracted Gibbs energies (intermediate) |
 | `tsne_plots/` | t-SNE scatter plots colored by each ΔG metric |
 | `tsne_plots_with_background/` | t-SNE plots with background polymer set |
