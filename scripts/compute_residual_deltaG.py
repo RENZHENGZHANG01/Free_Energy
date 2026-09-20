@@ -165,6 +165,38 @@ def extract_features(smiles_clean):
         rk = f"RING_{sz}_{'arom' if is_arom else 'aliph'}"
         ring_size_counts[rk] = ring_size_counts.get(rk, 0) + 1
 
+    # Assemble, DROPPING the columns that are exact linear combinations of others.
+    # Keeping them made the design matrix rank-deficient by construction (measured on
+    # 3957 molecules: 107 columns, rank 95). That is harmless for prediction -- Ridge
+    # simply splits the coefficient between the redundant columns -- but it costs two
+    # things that matter here:
+    #   * coefficients stop being identifiable. Adding d to N_single while subtracting
+    #     d from all 49 BP_*_SINGLE columns gives identical predictions, so "the energy
+    #     of a C-C single bond" has no unique answer.
+    #   * any D-optimal / leverage-driven selection degenerates: det(X'X) is identically
+    #     zero, so the criterion is driven purely by the ridge term and goes chasing
+    #     null-space directions that no amount of data can ever pin down. That was the
+    #     real reason the seed selector kept reaching for exotic molecules.
+    #
+    # Dropped, each with the identity that makes it redundant (all verified to exactly
+    # 0.000000 across 3957 molecules):
+    #   N_single / N_double / N_triple / N_aromatic = sum of the BP_*_<bondtype> columns
+    #   N_rings                                     = sum of the RING_* columns
+    #   N_H / N_F / N_Cl / N_Br / N_I               = number of bonds containing that
+    #       atom, because hydrogen and the halogens are monovalent: each atom
+    #       contributes exactly one bond. (Hypervalent iodine breaks this identity,
+    #       which is one more reason to keep such structures out of the pool.)
+    #
+    # The TOTALS are dropped rather than the detail columns: keeping BP_C-H, BP_N-H and
+    # BP_O-H lets each bond type carry its own energy, whereas keeping only N_H would
+    # collapse them into a single meaningless "hydrogen count".
+    #
+    # N_aromatic_rings is KEPT. It is NOT redundant with the RING_*_arom columns --
+    # RDKit's aromatic-ring perception and the all-atoms-aromatic test used above
+    # disagree (measured maximum difference: 3 rings).
+    _REDUNDANT = {"N_single", "N_double", "N_triple", "N_aromatic", "N_rings",
+                  "N_H", "N_F", "N_Cl", "N_Br", "N_I"}
+
     feat = {}
     feat.update({f"N_{k}": v for k, v in atom_counts.items()})
     feat.update({f"N_{k}": v for k, v in bond_counts.items()})
@@ -172,6 +204,8 @@ def extract_features(smiles_clean):
     feat["N_aromatic_rings"] = n_aromatic_rings
     feat.update(bond_pairs)
     feat.update(ring_size_counts)
+    for _k in _REDUNDANT:
+        feat.pop(_k, None)
 
     return feat
 
