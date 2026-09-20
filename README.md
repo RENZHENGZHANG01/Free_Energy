@@ -1,6 +1,35 @@
-# Free Energy Calculation Pipeline for Polyimide Monomers
+# Free Energy Pipeline for Polymer Monomers
 
-An automated computational chemistry pipeline for calculating **Gibbs free energies (ΔG)** of polyimide (PI) monomers using [ORCA](https://orcaforum.kofo.mpg.de/) quantum chemistry software. The pipeline converts SMILES representations to 3D structures, performs two-step DFT geometry optimization, runs frequency calculations, and extracts thermodynamic properties.
+A closed loop for learning the **size-independent thermodynamic stability** of polymer
+monomers, so that a generative model can be steered toward molecules that are actually
+stable.
+
+```
+pool (2.06M monomers)
+   └─ seed selection ──> 3,915 molecules
+          └─ DFT (ORCA) ──> ΔG
+                 └─ FS5 + Ridge ──> ΔG residual, the size-independent signal
+                        └─ GIN ensemble ──> prediction + uncertainty over the whole pool
+                               └─ active learning ──> next batch ──┐
+                                                                    │
+                        ┌───────────────────────────────────────────┘
+                        └─> back to DFT
+```
+
+Raw formation free energy scales with molecule size, so it cannot be compared across
+molecules and is useless as a guidance signal — it would only push a generator toward
+smaller or larger structures. Subtracting a composition baseline leaves the part that
+reflects structure, which is what the loop above learns.
+
+The DFT half (`scripts/`) converts SMILES to 3D structures, runs two-step geometry
+optimisation and frequencies in [ORCA](https://orcaforum.kofo.mpg.de/), and computes ΔG
+and its residual. The learning half (`ml/`) builds the candidate pool, selects what to
+compute, trains the GNN, and runs acquisition.
+
+> The name says "polyimide" for historical reasons: the first dataset was 1,077
+> polyimides. That set is 19.3% imide against 1.8% in the pool it was meant to explore,
+> covered only 31% of it, and has been retired. The current pool spans all four polymer
+> databases.
 
 ---
 
@@ -83,7 +112,26 @@ Free_Energy/
 │   ├── tsne.py                        # Analysis: t-SNE visualization of molecules
 │   └── tsne_all.py                    # Analysis: t-SNE with background polymer set
 │
+├── ml/                                # Learning half: pool, selection, GNN, acquisition
+│   ├── build_clean_pool.py            # Chemistry + element filter over the raw pool
+│   ├── seed_select.py                 # Iteration-0 seed: 4 components (see seeds/README)
+│   ├── active_learning_v3.py          # Acquisition: uncertainty-weighted max-coverage
+│   ├── gin_residual_v2_cv.py          # Train the GIN ensemble on the ΔG residual
+│   ├── predict_dataset_gin.py         # Ensemble inference over the whole pool
+│   ├── tau_calibration.py             # Where tau=0.4 comes from (measured, not chosen)
+│   ├── run_residual.sh                # Run step 6 against a dataset outside this repo
+│   └── sync_check.sh                  # Detect drift against the analysis workspace
+│
+├── pool/
+│   ├── pool_molecules.csv.gz          # 2,057,755 candidate monomers (14 MB)
+│   └── README.md                      # What was filtered out and why
+│
+├── seeds/
+│   ├── seed_v9.csv                    # 3,915 molecules: the current DFT campaign
+│   └── README.md                      # Why four components, with the measurements
+│
 └── data/                              # Data directory (see "Data Directory Guide" below)
+    ├── input_molecules.csv            # THE INPUT LIST: columns PID, smiles
     ├── atom_ref/                      # Atomic reference energies
     ├── xyz/                           # RDKit-generated 3D structures
     ├── opt_inp/                       # ORCA optimization input/output files
@@ -91,6 +139,38 @@ Free_Energy/
     ├── freq_inp/                      # ORCA frequency input files
     └── freq_out/                      # ORCA frequency output files
 ```
+
+## Running a campaign
+
+```bash
+# 1. Turn a seed set into the pipeline's input list
+python -c "import pandas as pd; d=pd.read_csv('seeds/seed_v9.csv'); \
+           d['PID']='SD'+d['rank'].astype(str); \
+           d[['PID','smiles']].to_csv('data/input_molecules.csv', index=False)"
+
+# 2. 3D structures (parallel; conformer search is on by default)
+python scripts/generate_xyz.py                      # N_WORKERS=16 to go faster
+
+# 3. Submit one ORCA job per molecule
+NUMBER=4000 ./full_submit_free_energy.sh
+
+# 4. When they finish: thermo -> ΔG -> residual
+python scripts/extract_thermo.py
+python scripts/compute_deltaG.py
+python scripts/compute_residual_deltaG.py
+```
+
+`data/input_molecules.csv` is the one name the DFT half agrees on: `generate_xyz.py`
+reads it, `full_submit_free_energy.sh` submits from it, and every output file is named
+after its `PID`, so the two stay in step. Override with `INPUT_CSV=...` for a
+second batch rather than editing either script.
+
+**Hold out the validation block.** 1,000 of the 3,915 seed rows have
+`is_validation=True`. They are a uniform random draw, which makes them the only
+unbiased measure of progress across active-learning rounds — every other component is
+chosen by a criterion correlated with the model or the coverage. Keep them out of GNN
+*training*; they should still be included when *fitting the baseline*, where each point
+carries only ~0.025 leverage.
 
 ---
 

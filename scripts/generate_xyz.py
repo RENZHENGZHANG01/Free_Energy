@@ -1,3 +1,22 @@
+"""
+Step 0 of the pipeline: SMILES -> 3D starting geometries for ORCA.
+
+INPUT   data/input_molecules.csv   (override with INPUT_CSV=...)
+        Required columns:
+            PID     unique molecule id; every downstream file is named after it
+                    (PID.xyz, PID_step1_pbe_opt.inp, PID_freq.out, ...)
+            smiles  polymer SMILES. '*' connection points are capped with methyl
+                    before embedding, so *CC(*)C is computed as CCC(C)C.
+        Any other columns are ignored.
+
+OUTPUT  data/xyz/<PID>.xyz          one file per molecule
+        data/failed_monomers.csv    rows that could not be embedded, with the reason
+
+The seed set for a campaign lives in seeds/ -- convert it with, for example:
+    python -c "import pandas as pd; d=pd.read_csv('seeds/seed_v9.csv'); \\
+               d['PID']='SD'+d['rank'].astype(str); \\
+               d[['PID','smiles']].to_csv('data/input_molecules.csv',index=False)"
+"""
 import os
 import random
 import multiprocessing as mp
@@ -23,9 +42,13 @@ def _default_workers():
 N_WORKERS = int(os.environ.get("N_WORKERS", _default_workers()))
 
 # ===== Path setup =====
-input_csv = "data/round1.csv"
-output_dir = "data/xyz"
-os.makedirs(output_dir, exist_ok=True)
+# INPUT_CSV lets a batch be run without editing this file. The default name says what
+# the file is; the previous "round1.csv" said only when it happened to be made, which
+# stopped being true after round 1 and left the pipeline pointing at a stale campaign.
+INPUT_CSV = os.environ.get("INPUT_CSV", "data/input_molecules.csv")
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "data/xyz")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+input_csv, output_dir = INPUT_CSV, OUTPUT_DIR      # legacy names used further down
 
 # Number of ETKDG conformers to generate per molecule before force-field ranking.
 # ORCA's geometry optimisation is a LOCAL minimiser: it relaxes into the nearest
