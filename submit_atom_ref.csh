@@ -35,8 +35,8 @@ echo "atom_ref: isolated-atom references"
 echo "Host: `hostname`   Date: `date`"
 echo "======================================"
 
-# Every subdirectory holding .inp files. Normally just "production"; "legacy_b3lyp"
-# appears only if generate_atom_ref_inp.py was run with --legacy-b3lyp.
+# Every subdirectory holding .inp files. There should be exactly one, "production";
+# generate_atom_ref_inp.py deliberately does not create any others.
 foreach d ( data/atom_ref/*/ )
   set tag = `basename $d`
   set n = `ls $d/*.inp |& grep -c '\.inp'`
@@ -65,7 +65,7 @@ conda activate rdkit_env
 # --use G: the molecular side of Delta_G is a Gibbs free energy, so the atom side
 # must be one too. --write-production also runs the keyword-consistency check and
 # backs up the previous atom_ref.csv before overwriting.
-python scripts/parse_atom_ref.py --write-production --use G
+python scripts/parse_atom_ref.py --write-production
 
 echo ""
 echo "atom_ref job finished: `date`"

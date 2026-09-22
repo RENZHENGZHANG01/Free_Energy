@@ -404,9 +404,10 @@ bash full_submit_free_energy.sh
 After all jobs complete:
 
 ```bash
-# Step 4 — extract thermodynamic data from frequency outputs
-#          → scripts/merged_G_raw.csv
-python scripts/extract_thermo.py
+# Step 4 — extract thermodynamic data from frequency outputs (joins in the
+#          SMILES from data/input_molecules.csv) → data/deltaG_raw.csv
+#          --expect-level aborts if the dataset mixes levels of theory
+python scripts/extract_thermo.py --expect-level
 
 # Step 5 — atomization ΔG for all molecules (needs scripts/atom_ref.csv)
 #          → scripts/final_data_with_deltaG.csv
@@ -505,11 +506,10 @@ After a complete pipeline run, the final results are saved to:
 
 | File | Description |
 |---|---|
-| `scripts/merged_G_raw.csv` | Step 4 output: `mol, smiles, Gibbs_Eh, G_minus_Eel` (intermediate) |
 | `scripts/final_data_with_deltaG.csv` | Step 5 output: SMILES, atom/bond counts, Gibbs energy, **ΔG** and all normalized metrics |
 | `scripts/final_data_with_residual_deltaG.csv` | **Step 6 output — the main result.** Adds `Delta_G_predicted` (FS5 Ridge baseline) and **`Delta_G_residual`**, the size-independent stability signal, in kcal/mol. Net-charged molecules get `NaN` residual (the DFT pipeline assumes neutral singlets) so downstream `dropna()` excludes them |
 | `scripts/residual_plots/` | Step 6 diagnostics: residual vs atom count / MW (both should be ≈ flat), parity plots, residual histogram |
-| `data/deltaG_raw.csv` | Raw extracted Gibbs energies (intermediate) |
+| `data/deltaG_raw.csv` | Step 4 output, read directly by `compute_deltaG.py`: `mol, smiles, Gibbs_Eh, G_minus_Eel` plus per-molecule diagnostics |
 | `tsne_plots/` | t-SNE scatter plots colored by each ΔG metric |
 | `tsne_plots_with_background/` | t-SNE plots with background polymer set |
 | `deltaG_scatter_plot.png` | Scatter plot of energy vs. atom count |
@@ -522,8 +522,8 @@ After a complete pipeline run, the final results are saved to:
 
 Edit the ORCA input templates in:
 - `scripts/generate_step1_opt_inp.py` — Step 1 method (default: PBE/def2-SVP)
-- `scripts/generate_step2_opt_inp_from_xyz.py` — Step 2 method (default: B3LYP-D3BJ/def2-TZVP)
-- `scripts/generate_freq_inp.py` — Frequency method (default: B3LYP-D3BJ/def2-TZVP)
+- `scripts/orca_settings.py` — **the level of theory for every step** (single source of truth)
+- `scripts/generate_freq_inp.py` — frequency-input layout (method comes from `orca_settings.py`)
 
 ### Changing Parallelization
 

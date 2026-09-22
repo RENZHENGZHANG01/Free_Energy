@@ -66,7 +66,31 @@ plt.rcParams.update({
 })
 
 DIR = os.path.dirname(os.path.abspath(__file__))
-CSV_PATH = os.path.join(DIR, "final_data_with_residual_deltaG.csv")
+
+
+# ---------------------------------------------------------------------------
+# The training dataset and the trained checkpoints are campaign-specific and are
+# NOT in the repo. Both were retired when the pipeline moved from B3LYP-D3BJ to
+# wB97X-D3 in 2026-09: a residual target computed at one level of theory, and a
+# network trained on it, are not valid for another. Failing loudly here is the
+# point -- picking up a leftover file would produce predictions that look fine.
+# ---------------------------------------------------------------------------
+def _require_dataset(path, what="the residual dataset"):
+    import os as _os, sys as _sys
+    if not _os.path.exists(path):
+        _sys.exit(
+            f"\n  ABORT: {what} not found:\n    {path}\n\n"
+            "  Produce it from the current DFT campaign:\n"
+            "      python scripts/extract_thermo.py --expect-level\n"
+            "      python scripts/compute_deltaG.py\n"
+            "      python scripts/compute_residual_deltaG.py\n\n"
+            "  Anything computed before the 2026-09 functional change is NOT a\n"
+            "  substitute; it is archived outside the repo for reference only.")
+    return path
+
+
+CSV_PATH = os.environ.get("TRAIN_CSV",
+                          os.path.join(DIR, "final_data_with_residual_deltaG.csv"))
 PLOT_DIR = os.path.join(DIR, "gin_cv_plots")
 MODEL_DIR = os.path.join(DIR, "gin_cv_models")
 os.makedirs(PLOT_DIR, exist_ok=True)
@@ -296,6 +320,7 @@ def main():
 
     # ── Load CSV ──
     df = pd.read_csv(CSV_PATH)
+    _require_dataset(CSV_PATH)
     target_col = 'Delta_G_residual'
     df = df.dropna(subset=[target_col, 'smiles', 'mol']).reset_index(drop=True)
 
@@ -311,8 +336,12 @@ def main():
     # ── Reference set of ORIGINAL molecule IDs (for old-vs-new subset eval) ──
     # Molecules present in the pre-active-learning dataset are "old"; everything
     # else is a "new" AL point. Used to report subset-resolved CV metrics.
-    REF_CSV = os.path.join(DIR, "final_data_with_residual_deltaG_june24.csv")
-    if os.path.exists(REF_CSV):
+    # Optional. Names the molecules that predate active learning, purely so the CV
+    # report can split "old" from "new" points. Set REF_CSV to enable it; there is
+    # no default file, because the one that used to be hardcoded here belonged to a
+    # retired campaign and silently disabled itself once that file was removed.
+    REF_CSV = os.environ.get("REF_CSV", "")
+    if REF_CSV and os.path.exists(REF_CSV):
         original_mol_ids = set(pd.read_csv(REF_CSV)['mol'].astype(str))
         print(f"  Reference: {len(original_mol_ids)} original mol IDs "
               f"from {os.path.basename(REF_CSV)} (old-vs-new subset eval enabled)")

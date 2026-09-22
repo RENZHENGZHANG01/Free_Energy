@@ -33,14 +33,36 @@ RDLogger.DisableLog("rdApp.*")
 
 # ----------------- GLOBALS & CONSTANTS -----------------
 DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = os.path.join(DIR, "gin_cv_models")
-TRAIN_CSV = os.path.join(DIR, "final_data_with_residual_deltaG.csv")
+MODEL_DIR = os.environ.get("MODEL_DIR", os.path.join(DIR, "gin_cv_models"))
+TRAIN_CSV = os.environ.get("TRAIN_CSV",
+                           os.path.join(DIR, "final_data_with_residual_deltaG.csv"))
+
+# ---------------------------------------------------------------------------
+# The training dataset and the trained checkpoints are campaign-specific and are
+# NOT in the repo. Both were retired when the pipeline moved from B3LYP-D3BJ to
+# wB97X-D3 in 2026-09: a residual target computed at one level of theory, and a
+# network trained on it, are not valid for another. Failing loudly here is the
+# point -- picking up a leftover file would produce predictions that look fine.
+# ---------------------------------------------------------------------------
+def _require_dataset(path, what="the residual dataset"):
+    import os as _os, sys as _sys
+    if not _os.path.exists(path):
+        _sys.exit(
+            f"\n  ABORT: {what} not found:\n    {path}\n\n"
+            "  Produce it from the current DFT campaign:\n"
+            "      python scripts/extract_thermo.py --expect-level\n"
+            "      python scripts/compute_deltaG.py\n"
+            "      python scripts/compute_residual_deltaG.py\n\n"
+            "  Anything computed before the 2026-09 functional change is NOT a\n"
+            "  substitute; it is archived outside the repo for reference only.")
+    return path
+
 XYZ_DIR = os.path.join(DIR, "xyz_unified")
 HARTREE_TO_KCAL = 627.509474
 
-# NOTE: must match gin_residual_v2_cv.py EXACTLY — the gin_cv_models checkpoints were
-# trained with the 13-element vocab (+Ge,Sn) => NODE_DIM=34. An 11-element/32-dim
-# featurizer fails to load them (node_encoder shape mismatch 34 vs 32).
+# NOTE: must match gin_residual_v2_cv.py EXACTLY — checkpoints are trained with the
+# 13-element vocab (+Ge,Sn) => NODE_DIM=34. An 11-element/32-dim featurizer fails to
+# load them (node_encoder shape mismatch 34 vs 32).
 COMMON_SYMBOLS = ['C', 'H', 'N', 'O', 'S', 'F', 'Cl', 'P', 'Si', 'Br', 'I', 'Ge', 'Sn']
 ELECTRONEGATIVITY = {
     'H': 2.20, 'C': 2.55, 'N': 3.04, 'O': 3.44, 'F': 3.98,
@@ -257,8 +279,13 @@ def main():
             all_models.append((fold, model))
 
     if not all_models:
-        print("No models found. Exiting.")
-        return
+        raise SystemExit(
+            f"\n  ABORT: no gin_fold*_model*.pt checkpoints in\n    {MODEL_DIR}\n\n"
+            "  Train them first:\n"
+            "      python ml/gin_residual_v2_cv.py\n\n"
+            "  Checkpoints trained before the 2026-09 functional change are NOT a\n"
+            "  substitute: they learned a residual target defined at a different\n"
+            "  level of theory, so they would predict confidently and wrongly.")
     print(f"Loaded {len(all_models)} models successfully")
 
     # Inference. Each model is inverted with ITS OWN fold scaler into kcal/mol BEFORE

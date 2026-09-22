@@ -122,14 +122,39 @@ def compute_deltaG():
     # All files are in the same directory as this script
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # --- Input: the reordered file with mol, smiles, Gibbs_Eh, G_minus_Eel ---
-    input_csv = os.path.join(script_dir, "merged_G_raw.csv")
+    # --- Input: written directly by extract_thermo.py, no manual merge step ---
+    root = os.path.dirname(script_dir)
+    input_csv = os.environ.get("THERMO_CSV",
+                               os.path.join(root, "data", "deltaG_raw.csv"))
     atom_ref_csv = os.path.join(script_dir, "atom_ref.csv")
 
     print("Reading input file:", input_csv)
+    if not os.path.exists(input_csv):
+        raise SystemExit(
+            f"\n  ABORT: {input_csv} not found.\n"
+            "  Produce it from the ORCA frequency outputs first:\n"
+            "      python scripts/extract_thermo.py --expect-level")
     df = pd.read_csv(input_csv)
 
     check_level_consistency(df, atom_ref_csv)
+
+    # Drop the runs extract_thermo.py flagged as unusable (no normal termination,
+    # SCF failure, no frequencies). Their Gibbs_Eh is already NaN; dropping them
+    # here keeps the count honest instead of emitting a row of NaNs.
+    if "usable" in df.columns:
+        n_bad = int((~df["usable"].astype(bool)).sum())
+        if n_bad:
+            print(f"  Dropping {n_bad} unusable calculation(s) flagged by extract_thermo.py")
+            df = df[df["usable"].astype(bool)].reset_index(drop=True)
+    if "smiles" not in df.columns:
+        raise SystemExit(
+            f"\n  ABORT: {input_csv} has no 'smiles' column, so atoms cannot be\n"
+            "  counted. Re-run extract_thermo.py with --smiles-csv pointing at the\n"
+            "  campaign input CSV.")
+    n_nosmi = int(df["smiles"].isna().sum())
+    if n_nosmi:
+        print(f"  Dropping {n_nosmi} molecule(s) with no SMILES")
+        df = df[df["smiles"].notna()].reset_index(drop=True)
 
     print("Reading atom reference energy:", atom_ref_csv)
     atom_ref = pd.read_csv(atom_ref_csv)

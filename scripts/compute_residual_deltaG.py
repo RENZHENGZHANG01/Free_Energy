@@ -30,7 +30,15 @@ remove size dependence, weak enough to leave the structural signal.
 
 Validated alternatives, all rejected (out-of-fold GroupKFold new-subset MAE,
 kcal/mol; sources `baseline_comparison.py` + a 15× repeated group-split sweep,
-both deleted 2026-07-28 once FS5 was final):
+both deleted 2026-07-28 once FS5 was final).
+
+  NOTE these absolute MAEs were measured on the n=1077 B3LYP-D3BJ dataset, which
+  was retired when the pipeline moved to wB97X-D3 in 2026-09. Expect the numbers
+  to move once the new campaign is complete. The RANKING is what selected FS5 and
+  it does not depend on the functional: it reflects how much of ΔG is explained by
+  composition counts, which is a property of the featurisation, not of the DFT.
+  Re-measure before quoting any of these figures.
+
   Ridge + FS1 (element+bond-type+ring totals, the original)  54.6
   Ridge + FS2 (element × hybridization)                      45.9
   Ridge + FS4 (bond-additivity, element-pair × bondtype)     ~24
@@ -58,8 +66,10 @@ Net-charged species are excluded (the DFT pipeline runs everything as a neutral
 singlet, so their ΔG is invalid): rows are kept with NaN residual so downstream
 `dropna()` drops them naturally.
 
-Current state: n=1077, residual mean −0.0000, sd 8.8706 kcal/mol,
-r(residual, total_atoms) = −0.0009  ⇒ size-independent, signal intact.
+Last measured state (n=1077, B3LYP-D3BJ, retired 2026-09): residual mean −0.0000,
+sd 8.8706 kcal/mol, r(residual, total_atoms) = −0.0009 ⇒ size-independent, signal
+intact. The sd is the scale the residual signal has to be judged against, so it
+must be re-measured on the wB97X-D3 dataset rather than carried over.
 """
 
 import os

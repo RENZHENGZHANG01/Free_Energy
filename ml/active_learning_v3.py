@@ -51,6 +51,8 @@ N_WORKERS   = int(os.environ.get("N_WORKERS", max(1, mp.cpu_count())))
 POOL_CAP    = int(os.environ.get("POOL_CAP", 0))
 FP_CHUNK    = int(os.environ.get("FP_CHUNK", 20000))
 TRAIN_CSV   = os.environ.get("TRAIN_CSV", "final_data_with_residual_deltaG.csv")
+# Retired with the 2026-09 functional change along with the checkpoints trained on
+# it; a residual target from one level of theory is not valid for another.
 OUT_CSV     = os.environ.get("OUT_CSV", "al_v3_selected.csv")
 CACHE = os.path.join(DIR, "al_v2_cache"); os.makedirs(CACHE, exist_ok=True)
 

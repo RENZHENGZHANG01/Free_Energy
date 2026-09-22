@@ -10,16 +10,15 @@ approximation as the molecules, or the subtraction cancels nothing. The keyword
 line therefore is not written here at all -- it is imported from orca_settings.py,
 the same object the molecular frequency inputs use. They cannot drift apart.
 
-    production   = orca_settings.ATOM_REF  (== orca_settings.FREQ)
-    legacy_b3lyp = the old B3LYP/def2-TZVP set, emitted only with --legacy-b3lyp,
-                   and useful for one thing only: reproducing the historical
-                   Delta_G values of the pre-2026-09 dataset. Never mix it with
-                   wB97X-D3 molecular energies.
+There is exactly ONE set, "production", written from orca_settings.ATOM_REF. That
+is deliberate: a second set sitting next to it is an invitation to parse the wrong
+one. If the level of theory ever changes, change orca_settings.py and re-run this
+-- do not add a parallel directory.
 
-    (The previous version of this script generated a "wb97x" set at def2-TZVPPD
-    while the molecules ran at def2-TZVP. That mismatch would have silently
-    corrupted every Delta_G, which is exactly why the string now comes from
-    one shared module.)
+    (An earlier version generated a second set at def2-TZVPPD while the molecules
+    ran at def2-TZVP. That mismatch would have silently corrupted every Delta_G,
+    which is why the string now comes from one shared module and is verified on
+    the way back in by parse_atom_ref.py.)
 
 WHY GIBBS, NOT ELECTRONIC ENERGY
     The molecule side of the subtraction is a Gibbs free energy, so the atom side
@@ -42,7 +41,7 @@ containing that element:
     F  2s2 2p5    2P   -> 2      Ge/Sn  ns2 np2  3P  -> 3
                                  Br/I   ns2 np5  2P  -> 2
 
-Usage:  python generate_atom_ref_inp.py [--outdir ../data/atom_ref] [--legacy-b3lyp]
+Usage:  python generate_atom_ref_inp.py [--outdir ../data/atom_ref]
 """
 import os, sys, argparse
 
@@ -55,8 +54,6 @@ ATOM_MULT = {
     "Si": 3, "P": 4, "S": 3, "Cl": 2,
     "Ge": 3, "Br": 2, "Sn": 3, "I": 2,
 }
-
-LEGACY_B3LYP = "! B3LYP D3BJ def2-TZVP TightSCF Freq RIJCOSX def2/J"
 
 # NOTE: no %pal. A single atom has ~10-30 basis functions, so MPI communication
 # dwarfs the work: an earlier "%pal nprocs 8" attempt spun 20 minutes on MPI
@@ -85,14 +82,9 @@ def main():
     ap = argparse.ArgumentParser()
     here = os.path.dirname(os.path.abspath(__file__))
     ap.add_argument("--outdir", default=os.path.join(here, "..", "data", "atom_ref"))
-    ap.add_argument("--legacy-b3lyp", action="store_true",
-                    help="also emit the old B3LYP set (only for reproducing "
-                         "historical Delta_G; do not mix with production data)")
     args = ap.parse_args()
 
     n = write_set(args.outdir, "production", S.ATOM_REF)
-    if args.legacy_b3lyp:
-        n += write_set(args.outdir, "legacy_b3lyp", LEGACY_B3LYP)
 
     print(f"\n  Generated {n} atom inputs.")
     print("  Multiplicities:", ", ".join(f"{k}={v}" for k, v in ATOM_MULT.items()))

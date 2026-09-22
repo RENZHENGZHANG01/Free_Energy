@@ -6,6 +6,23 @@ from rdkit.Chem import AllChem
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 
+# The DFT dataset is regenerated per campaign and is not in the repo. Point at it
+# explicitly rather than failing with a bare FileNotFoundError, because the usual
+# reason it is absent is that the level of theory changed and the old one was
+# retired -- in which case silently picking up a leftover file would be worse.
+def _require(path, what):
+    import os as _os, sys as _sys
+    if not _os.path.exists(path):
+        _sys.exit(
+            f"\n  ABORT: {what} not found:\n    {path}\n\n"
+            "  It is produced by the DFT pipeline:\n"
+            "      python scripts/extract_thermo.py --expect-level\n"
+            "      python scripts/compute_deltaG.py\n"
+            "      python scripts/compute_residual_deltaG.py\n\n"
+            "  Set the matching environment variable to use a different path.")
+    return path
+
+
 
 def preprocess_smiles(smi):
     return smi.replace("*", "C") if isinstance(smi, str) else smi
@@ -21,12 +38,17 @@ def fp_from_smiles(smiles, nBits=1024):
 
 def generate_tsne_plots():
 
-    root = os.path.dirname(os.path.dirname(__file__))
+    # compute_deltaG.py writes the dataset next to itself, in scripts/ -- not in the
+    # project root, which is where this used to look.
+    here = os.path.dirname(os.path.abspath(__file__))
+    root = os.path.dirname(here)
 
     # -----------------------------------------
     # Load main dataset (with ΔG)
     # -----------------------------------------
-    df_main_path = os.path.join(root, "final_data_with_deltaG.csv")
+    df_main_path = _require(os.environ.get(
+        "DELTAG_CSV", os.path.join(here, "final_data_with_deltaG.csv")),
+        "the Delta_G dataset")
     print("Loading foreground dataset:", df_main_path)
     df_main = pd.read_csv(df_main_path)
     df_main["smiles_clean"] = df_main["smiles_clean"].apply(preprocess_smiles)

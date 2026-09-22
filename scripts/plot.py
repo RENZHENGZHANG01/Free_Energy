@@ -1,8 +1,29 @@
+import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Load final ΔG dataset
-df = pd.read_csv("final_data_with_deltaG.csv")
+# The DFT dataset is regenerated per campaign and is not in the repo. Point at it
+# explicitly rather than failing with a bare FileNotFoundError, because the usual
+# reason it is absent is that the level of theory changed and the old one was
+# retired -- in which case silently picking up a leftover file would be worse.
+def _require(path, what):
+    import os as _os, sys as _sys
+    if not _os.path.exists(path):
+        _sys.exit(
+            f"\n  ABORT: {what} not found:\n    {path}\n\n"
+            "  It is produced by the DFT pipeline:\n"
+            "      python scripts/extract_thermo.py --expect-level\n"
+            "      python scripts/compute_deltaG.py\n"
+            "      python scripts/compute_residual_deltaG.py\n\n"
+            "  Set the matching environment variable to use a different path.")
+    return path
+
+
+# Load final ΔG dataset. compute_deltaG.py writes it next to this script; the old
+# bare relative path only worked when the script happened to be run from scripts/.
+DIR = os.path.dirname(os.path.abspath(__file__))
+CSV = os.environ.get("DELTAG_CSV", os.path.join(DIR, "final_data_with_deltaG.csv"))
+df = pd.read_csv(_require(CSV, "the Delta_G dataset"))
 
 # X-axis
 x_col = "total_atoms"

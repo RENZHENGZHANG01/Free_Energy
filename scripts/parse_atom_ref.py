@@ -2,7 +2,7 @@
 """
 Parse isolated-atom ORCA outputs -> atom_ref CSV used by compute_deltaG.py.
 
-WHICH ENERGY GOES IN atom_ref.csv?  ->  G_Eh  (Gibbs free energy). Default --use G.
+WHICH ENERGY GOES IN atom_ref.csv?  ->  G_Eh  (Gibbs free energy). Not optional.
 
     Delta_G = G(molecule) - SUM_i n_i * G(atom_i)
 
@@ -12,14 +12,15 @@ too. A free atom has no vibrations and no rotations, so its G is E_elec plus the
 translational term and the electronic degeneracy; small, but not zero, and not
 constant across elements.
 
-    Historical note. Until 2026-09 this file defaulted to --use E and subtracted
-    ELECTRONIC atom energies from MOLECULAR Gibbs energies. That is not a free
-    energy of any process. It survived in practice only because the mismatch is a
-    per-element constant times atom count, which the composition-level Ridge
-    baseline in compute_residual_deltaG.py absorbs exactly (R^2 = 1.0000000000
-    against the correction term), leaving the residual target -- the actual
-    training signal -- unchanged. Delta_G itself was still uninterpretable.
-    --use E is kept only for reproducing those historical numbers.
+    Historical note. Until 2026-09 this wrote ELECTRONIC atom energies, which were
+    then subtracted from MOLECULAR Gibbs energies. That is not a free energy of any
+    process. It survived in practice only because the mismatch is a per-element
+    constant times atom count, which the composition-level Ridge baseline in
+    compute_residual_deltaG.py absorbs exactly (R^2 = 1.0000000000 against the
+    correction term), leaving the residual target -- the actual training signal --
+    unchanged. Delta_G itself was still uninterpretable. There is deliberately no
+    option to go back: E_elec_Eh is still reported in the per-set table for
+    inspection, but the production file is always Gibbs.
 
 CONSISTENCY IS CHECKED, NOT ASSUMED
     Each .out echoes its own keyword line. For the "production" set this script
@@ -29,10 +30,8 @@ CONSISTENCY IS CHECKED, NOT ASSUMED
     def2-TZVPPD, molecules at def2-TZVP) was live in this pipeline before.
 
 Usage:
-    python parse_atom_ref.py                                  # report only
-    python parse_atom_ref.py --write-production               # writes atom_ref.csv (Gibbs)
-    python parse_atom_ref.py --write-production --use E       # historical/electronic
-    python parse_atom_ref.py --set legacy_b3lyp --write-production --use E
+    python parse_atom_ref.py                     # report only
+    python parse_atom_ref.py --write-production  # writes scripts/atom_ref.csv
 """
 import os, re, sys, argparse, csv
 
@@ -111,9 +110,6 @@ def main():
                     help="subdirectory of --dir to use (default: production)")
     ap.add_argument("--write-production", action="store_true",
                     help="overwrite scripts/atom_ref.csv from the chosen set")
-    ap.add_argument("--use", choices=["G", "E"], default="G",
-                    help="energy column for atom_ref.csv. Default G (Gibbs), which "
-                         "is what matches the molecular side; E is historical only.")
     ap.add_argument("--force", action="store_true",
                     help="write even if the keyword-consistency check fails")
     args = ap.parse_args()
@@ -161,7 +157,7 @@ def main():
         print("  Fix the runs (or pass --force if you are certain).")
         raise SystemExit(1)
 
-    key = "G_Eh" if args.use == "G" else "E_elec_Eh"
+    key = "G_Eh"   # see module docstring; deliberately not configurable
     vals = {s: r[key] for s, r in rows}
     if any(v is None for v in vals.values()):
         raise SystemExit("\n  ABORT: some energies missing; not writing atom_ref.csv")

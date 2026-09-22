@@ -75,7 +75,7 @@ cd $WORK
 python scripts/generate_step2_opt_inp_from_xyz.py --mol $MOL
 
 #################################
-# 4. STEP 2: B3LYP OPT
+# 4. STEP 2: PRODUCTION OPT
 #################################
 cp $WORK/data/opt_inp/${MOL}_step2_opt.inp $SCRATCH/
 cd $SCRATCH

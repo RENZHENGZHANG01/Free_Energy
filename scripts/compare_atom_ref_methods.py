@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Quantify what switching the atomic reference set from one level of theory to another
-does -- e.g. legacy_b3lyp (B3LYP-D3BJ/def2-TZVP) -> production (wB97X-D3/def2-TZVP).
+does, e.g. after changing the functional in orca_settings.py.
 
 Two very different questions, answered separately:
 
@@ -26,7 +26,7 @@ The two sets are named by their subdirectory under data/atom_ref/ (as written by
 generate_atom_ref_inp.py and parsed by parse_atom_ref.py).
 
 Usage:
-  python compare_atom_ref_methods.py [--old legacy_b3lyp] [--new production] \
+  python compare_atom_ref_methods.py --old <set> --new <set> \
                                      [--dataset ../../final_data_with_residual_deltaG.csv]
 """
 import os, argparse, csv
@@ -48,8 +48,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", default=os.path.join(HERE, "..", "..",
                                                       "final_data_with_residual_deltaG.csv"))
-    ap.add_argument("--old", default="legacy_b3lyp", help="baseline set name")
+    ap.add_argument("--old", required=True, help="baseline set name "
+                    "(a subdirectory of data/atom_ref/)")
     ap.add_argument("--new", default="production", help="comparison set name")
+
     args = ap.parse_args()
 
     b, w = load(args.old), load(args.new)
@@ -89,7 +91,7 @@ def main():
         if cnt_cols:
             print("\n" + "=" * 88)
             print("  (b) Induced Delta_G shift IF ONLY the atom references were swapped")
-            print("      (molecules still B3LYP) -- per-element constant x atom count")
+            print("      (molecules unchanged) -- per-element constant x atom count")
             print("=" * 88)
             shift = np.zeros(len(df))
             for el, col in cnt_cols.items():
@@ -112,7 +114,7 @@ def main():
     print("\n" + "=" * 88)
     print("  (c) G - E_elec per atom (thermal/entropic term; single atoms have no ZPE)")
     print("=" * 88)
-    print(f"  {'atom':5s} | {'B3LYP G-E':>12s} {'wB97X G-E':>12s}   (kcal/mol)")
+    print(f"  {'atom':5s} | {args.old[:12]:>12s} {args.new[:12]:>12s}   (kcal/mol)")
     for a, eb, ew, d, gb, gw in rows:
         if gb is None or gw is None or (isinstance(gb, float) and np.isnan(gb)):
             print(f"  {a:5s} |  (no Freq thermochemistry parsed)"); continue

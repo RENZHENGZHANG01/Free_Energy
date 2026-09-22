@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """
-Parse ORCA frequency outputs -> thermochemistry table (data/deltaG_raw.csv).
+Parse ORCA frequency outputs -> thermochemistry table (data/deltaG_raw.csv),
+which is the file compute_deltaG.py reads next.
+
+  The SMILES are joined in here from the campaign's input CSV, because
+  compute_deltaG.py needs them to count atoms. That join used to be done by hand
+  into a separate "merged_G_raw.csv"; nothing produced that file, the README
+  claimed this script did, and the hand-made copy inevitably went stale against
+  the .out files it was supposed to summarise. One script, one output, no manual
+  step.
 
 This used to pull two numbers and trust them. It now records whether the
 calculation is trustworthy at all, because the two ways a frequency job goes wrong
@@ -117,6 +125,10 @@ def main():
         "FREQ_OUT_DIR", os.path.join(root, "data", "freq_out")))
     ap.add_argument("--out", default=os.environ.get(
         "THERMO_CSV", os.path.join(root, "data", "deltaG_raw.csv")))
+    ap.add_argument("--smiles-csv", default=os.environ.get(
+        "INPUT_CSV", os.path.join(root, "data", "input_molecules.csv")),
+        help="campaign input CSV (PID, smiles); joined in so compute_deltaG.py "
+             "can count atoms. Pass '' to skip.")
     ap.add_argument("--imag-noise-cm", type=float, default=20.0,
                     help="|v| below this is treated as numerical noise (default 20)")
     ap.add_argument("--drop-saddle", action="store_true",
@@ -167,6 +179,29 @@ def main():
         })
 
     df = pd.DataFrame(rows)
+
+    # Join the SMILES that compute_deltaG.py needs to count atoms.
+    if args.smiles_csv:
+        if not os.path.exists(args.smiles_csv):
+            raise SystemExit(
+                f"\n  ABORT: input CSV not found: {args.smiles_csv}\n"
+                "  compute_deltaG.py cannot count atoms without the SMILES.\n"
+                "  Point --smiles-csv at the campaign input, or pass --smiles-csv ''\n"
+                "  to write the thermochemistry table without them.")
+        src = pd.read_csv(args.smiles_csv)
+        idcol = "PID" if "PID" in src.columns else src.columns[0]
+        if "smiles" not in src.columns:
+            raise SystemExit(f"\n  ABORT: {args.smiles_csv} has no 'smiles' column")
+        smap = dict(zip(src[idcol].astype(str), src["smiles"].astype(str)))
+        df.insert(1, "smiles", df["mol"].astype(str).map(smap))
+        missing = df["smiles"].isna()
+        if missing.any():
+            print(f"\n  WARNING: {int(missing.sum())} molecule(s) have a frequency "
+                  f"output but no SMILES in {os.path.basename(args.smiles_csv)}:")
+            for m in df.loc[missing, "mol"].head(10):
+                print(f"    {m}")
+            print("  They cannot be turned into Delta_G and will be dropped downstream.")
+
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     df.to_csv(args.out, index=False)
 
