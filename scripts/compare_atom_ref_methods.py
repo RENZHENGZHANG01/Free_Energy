@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Quantify what switching B3LYP-D3BJ/def2-TZVP -> wB97X-D3/def2-TZVPPD does.
+Quantify what switching the atomic reference set from one level of theory to another
+does -- e.g. legacy_b3lyp (B3LYP-D3BJ/def2-TZVP) -> production (wB97X-D3/def2-TZVP).
 
 Two very different questions, answered separately:
 
@@ -21,7 +22,12 @@ This script therefore reports:
   b) the induced Delta_G shift for the real dataset composition (per molecule)
   c) an explicit statement of what is/ isn't affected, so the cost/benefit is clear.
 
-Usage: python compare_atom_ref_methods.py [--dataset ../../final_data_with_residual_deltaG.csv]
+The two sets are named by their subdirectory under data/atom_ref/ (as written by
+generate_atom_ref_inp.py and parsed by parse_atom_ref.py).
+
+Usage:
+  python compare_atom_ref_methods.py [--old legacy_b3lyp] [--new production] \
+                                     [--dataset ../../final_data_with_residual_deltaG.csv]
 """
 import os, argparse, csv
 import pandas as pd, numpy as np
@@ -42,18 +48,24 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", default=os.path.join(HERE, "..", "..",
                                                       "final_data_with_residual_deltaG.csv"))
+    ap.add_argument("--old", default="legacy_b3lyp", help="baseline set name")
+    ap.add_argument("--new", default="production", help="comparison set name")
     args = ap.parse_args()
 
-    b, w = load("b3lyp"), load("wb97x")
+    b, w = load(args.old), load(args.new)
     if not b or not w:
-        print("  Need both atom_ref_b3lyp.csv and atom_ref_wb97x.csv "
+        have = sorted(os.path.basename(f)[len("atom_ref_"):-4]
+                      for f in __import__("glob").glob(
+                          os.path.join(HERE, "..", "data", "atom_ref", "atom_ref_*.csv")))
+        print(f"  Need both atom_ref_{args.old}.csv and atom_ref_{args.new}.csv "
               "(run parse_atom_ref.py after the ORCA job).")
+        print(f"  Sets available: {have or 'none'}")
         return
 
     print("=" * 88)
-    print("  (a) PER-ATOM reference energies: B3LYP-D3BJ/def2-TZVP  vs  wB97X-D3/def2-TZVPPD")
+    print(f"  (a) PER-ATOM reference energies: {args.old}  vs  {args.new}")
     print("=" * 88)
-    print(f"  {'atom':5s} {'mult':>4s} | {'B3LYP E_elec':>15s} {'wB97X E_elec':>15s} "
+    print(f"  {'atom':5s} {'mult':>4s} | {args.old[:15]:>15s} {args.new[:15]:>15s} "
           f"{'diff(Eh)':>11s} {'diff(kcal/mol)':>14s}")
     print("  " + "-" * 84)
     rows = []

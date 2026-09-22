@@ -1,136 +1,207 @@
 #!/usr/bin/env python3
 """
-Parse isolated-atom ORCA outputs -> atom_ref CSVs.
+Parse isolated-atom ORCA outputs -> atom_ref CSV used by compute_deltaG.py.
 
-Emits BOTH energies per atom so the choice is explicit:
-  E_elec_Eh : "FINAL SINGLE POINT ENERGY"  (electronic energy only)
-  G_Eh      : "Final Gibbs free energy"    (what extract_thermo.py pulls for MOLECULES)
+WHICH ENERGY GOES IN atom_ref.csv?  ->  G_Eh  (Gibbs free energy). Default --use G.
 
-Which one belongs in atom_ref.csv?  --> E_elec_Eh  (verified 2026-07-24)
-  The EXISTING atom_ref.csv holds ELECTRONIC energies: a fresh
-  B3LYP-D3BJ/def2-TZVP/mult=3 run of the C atom reproduces
-  FINAL SINGLE POINT ENERGY = -37.838153520618 vs the stored -37.83815352 (exact match),
-  while that atom's Gibbs value is -37.85270000. So the 11 original elements were
-  computed correctly with this very setup, and Ge/Sn must be added the SAME way
-  (electronic energy) or atom_ref.csv becomes internally inconsistent and every
-  molecule's Delta_G shifts.
+    Delta_G = G(molecule) - SUM_i n_i * G(atom_i)
 
-  Note Delta_G = Gibbs_Eh(molecule) - SUM n_i * E_elec(atom_i) is therefore not a
-  strict formation FREE energy (molecule side has thermal terms, atom side does not).
-  That mismatch is a per-element CONSTANT x atom count, which the composition-level
-  Ridge baseline (N_C, N_H, ... features) absorbs exactly -- so the RESIDUAL target
-  (the actual training signal) is unaffected. Switching to G_Eh would change every
-  historical Delta_G, so DON'T, unless you recompute the whole dataset.
+Both sides must be the same kind of quantity. extract_thermo.py pulls "Final Gibbs
+free energy" for the molecules, so the atoms must contribute Gibbs free energies
+too. A free atom has no vibrations and no rotations, so its G is E_elec plus the
+translational term and the electronic degeneracy; small, but not zero, and not
+constant across elements.
 
-Also flags SCF convergence and multiplicity so a silently-wrong reference is caught.
-Usage:  python parse_atom_ref.py [--dir ../data/atom_ref] [--write-production]
+    Historical note. Until 2026-09 this file defaulted to --use E and subtracted
+    ELECTRONIC atom energies from MOLECULAR Gibbs energies. That is not a free
+    energy of any process. It survived in practice only because the mismatch is a
+    per-element constant times atom count, which the composition-level Ridge
+    baseline in compute_residual_deltaG.py absorbs exactly (R^2 = 1.0000000000
+    against the correction term), leaving the residual target -- the actual
+    training signal -- unchanged. Delta_G itself was still uninterpretable.
+    --use E is kept only for reproducing those historical numbers.
+
+CONSISTENCY IS CHECKED, NOT ASSUMED
+    Each .out echoes its own keyword line. For the "production" set this script
+    compares that line against orca_settings.ATOM_REF and refuses to write
+    atom_ref.csv if they differ -- which is what catches a stale directory of
+    outputs left over from a previous functional. That exact failure (atoms at
+    def2-TZVPPD, molecules at def2-TZVP) was live in this pipeline before.
+
+Usage:
+    python parse_atom_ref.py                                  # report only
+    python parse_atom_ref.py --write-production               # writes atom_ref.csv (Gibbs)
+    python parse_atom_ref.py --write-production --use E       # historical/electronic
+    python parse_atom_ref.py --set legacy_b3lyp --write-production --use E
 """
-import os, re, argparse, csv
+import os, re, sys, argparse, csv
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import orca_settings as S
+
+HARTREE_KCAL = 627.509474
+
 
 def parse_one(path):
     txt = open(path, errors="ignore").read()
+
     def last(pat):
         m = re.findall(pat, txt)
         return float(m[-1]) if m else None
-    rec = {
+
+    # ORCA echoes the input file as "|  1> ! <keywords>". Used to verify that these
+    # outputs were actually produced with the level of theory we think they were.
+    kw = re.search(r"\|\s*\d+>\s*(!.*)", txt)
+
+    return {
         "E_elec_Eh": last(r"FINAL SINGLE POINT ENERGY\s+(-?\d+\.\d+)"),
         "G_Eh":      last(r"Final Gibbs free energy\s*\.*\s*(-?\d+\.\d+)"),
         "mult":      last(r"Multiplicity\s+Mult\s*\.*\s*(\d+)"),
-        "converged": ("SUCCESS" in txt) or ("ORCA TERMINATED NORMALLY" in txt),
-        "scf_fail":  ("SCF NOT CONVERGED" in txt) or ("SCF ITERATIONS DID NOT CONVERGE" in txt),
+        "keywords":  kw.group(1).strip() if kw else None,
+        "converged": "ORCA TERMINATED NORMALLY" in txt,
+        "scf_fail":  ("SCF NOT CONVERGED" in txt)
+                     or ("SCF ITERATIONS DID NOT CONVERGE" in txt),
     }
-    return rec
+
+
+def norm_kw(s):
+    """Compare keyword lines ignoring case and whitespace, not order."""
+    return " ".join(s.lower().split()) if s else None
+
+
+def read_set(d):
+    rows = []
+    for fn in sorted(os.listdir(d)):
+        # STRICT "<El>_atom.out". ORCA emits auxiliary per-ECP-element files such as
+        # "I_atom_atom53.out" / "Sn_atom_atom50.out"; those are not reference
+        # energies and must never be treated as elements.
+        m = re.match(r"^([A-Z][a-z]?)_atom\.out$", fn)
+        if m:
+            rows.append((m.group(1), parse_one(os.path.join(d, fn))))
+    return rows
+
+
+def report(tag, rows, expect_kw):
+    print(f"\n  === {tag} ===   {len(rows)} atoms")
+    print(f"  {'atom':5s} {'E_elec_Eh':>18s} {'G_Eh':>18s} {'G-E(kcal)':>10s} {'mult':>4s}  status")
+    problems = []
+    for sym, r in rows:
+        bad = []
+        if r["E_elec_Eh"] is None: bad.append("no E")
+        if r["G_Eh"] is None:      bad.append("no G")
+        if not r["converged"]:     bad.append("no normal termination")
+        if r["scf_fail"]:          bad.append("SCF not converged")
+        if expect_kw and norm_kw(r["keywords"]) != norm_kw(expect_kw):
+            bad.append("keyword mismatch")
+        gap = ((r["G_Eh"] - r["E_elec_Eh"]) * HARTREE_KCAL
+               if (r["G_Eh"] is not None and r["E_elec_Eh"] is not None) else None)
+        print(f"  {sym:5s} {str(r['E_elec_Eh']):>18s} {str(r['G_Eh']):>18s} "
+              f"{(f'{gap:10.2f}' if gap is not None else ' ' * 10)} "
+              f"{int(r['mult'] or 0):>4d}  {'** ' + ', '.join(bad) + ' **' if bad else 'ok'}")
+        if bad:
+            problems.append((sym, bad, r["keywords"]))
+    return problems
 
 
 def main():
     ap = argparse.ArgumentParser()
     here = os.path.dirname(os.path.abspath(__file__))
     ap.add_argument("--dir", default=os.path.join(here, "..", "data", "atom_ref"))
+    ap.add_argument("--set", default="production",
+                    help="subdirectory of --dir to use (default: production)")
     ap.add_argument("--write-production", action="store_true",
-                    help="overwrite scripts/atom_ref.csv from the B3LYP set")
-    ap.add_argument("--use", choices=["G", "E"], default="E",
-                    help="energy column for the production atom_ref.csv. Default E "
-                         "(electronic) -- matches the existing 11 entries; see module docstring.")
+                    help="overwrite scripts/atom_ref.csv from the chosen set")
+    ap.add_argument("--use", choices=["G", "E"], default="G",
+                    help="energy column for atom_ref.csv. Default G (Gibbs), which "
+                         "is what matches the molecular side; E is historical only.")
+    ap.add_argument("--force", action="store_true",
+                    help="write even if the keyword-consistency check fails")
     args = ap.parse_args()
 
     base = os.path.abspath(args.dir)
-    summary = {}
-    for tag in ("b3lyp", "wb97x"):
-        d = os.path.join(base, tag)
-        if not os.path.isdir(d):
-            continue
-        rows = []
-        for fn in sorted(os.listdir(d)):
-            # STRICT match "<El>_atom.out" only. ORCA emits extra per-ECP-element files
-            # like "I_atom_atom53.out" / "Sn_atom_atom50.out" (auxiliary ECP atom runs);
-            # those are NOT reference energies and must not be treated as elements.
-            m = re.match(r"^([A-Z][a-z]?)_atom\.out$", fn)
-            if not m:
-                continue
-            sym = m.group(1)
-            r = parse_one(os.path.join(d, fn))
-            rows.append((sym, r))
-        if not rows:
-            print(f"  {tag}: no .out files yet"); continue
-        out_csv = os.path.join(base, f"atom_ref_{tag}.csv")
-        with open(out_csv, "w", newline="") as fh:
-            w = csv.writer(fh); w.writerow(["atom", "E_elec_Eh", "G_Eh", "mult", "ok"])
-            for sym, r in rows:
-                w.writerow([sym, r["E_elec_Eh"], r["G_Eh"], int(r["mult"] or 0),
-                            "yes" if (r["converged"] and not r["scf_fail"]) else "NO"])
-        summary[tag] = rows
-        print(f"\n  === {tag} ===  -> {out_csv}")
-        print(f"  {'atom':5s} {'E_elec_Eh':>16s} {'G_Eh':>16s} {'mult':>4s}  status")
-        for sym, r in rows:
-            bad = (not r["converged"]) or r["scf_fail"] or r["E_elec_Eh"] is None
-            print(f"  {sym:5s} {str(r['E_elec_Eh']):>16s} {str(r['G_Eh']):>16s} "
-                  f"{int(r['mult'] or 0):>4d}  {'** CHECK **' if bad else 'ok'}")
-        missing = [s for s, r in rows if r["E_elec_Eh"] is None]
-        if missing: print(f"  !! no energy parsed for: {missing}")
+    d = os.path.join(base, args.set)
+    if not os.path.isdir(d):
+        avail = [x for x in sorted(os.listdir(base))
+                 if os.path.isdir(os.path.join(base, x))] if os.path.isdir(base) else []
+        raise SystemExit(f"no such set: {d}\n  available: {avail}")
 
-    # optional: write the production file used by compute_deltaG.py
-    if args.write_production and "b3lyp" in summary:
-        rows = summary["b3lyp"]
-        key = "G_Eh" if args.use == "G" else "E_elec_Eh"
-        vals = {s: r[key] for s, r in rows}
-        if any(v is None for v in vals.values()):
-            print("\n  ABORT: some B3LYP energies missing; not writing production atom_ref.csv")
-            return
-        prod = os.path.join(here, "atom_ref.csv")
-        old = {}
-        if os.path.exists(prod):
-            with open(prod) as fh:
-                for row in csv.DictReader(fh):
-                    old[row["atom"]] = float(row["energy"])
-        # back up before overwriting (the file drives every molecule's Delta_G)
-        if os.path.exists(prod):
-            import shutil, time as _t
-            bak = prod + ".bak_" + _t.strftime("%Y%m%d_%H%M%S")
-            shutil.copy2(prod, bak)
-            print(f"\n  backed up old file -> {os.path.basename(bak)}")
-        with open(prod, "w", newline="") as fh:
-            w = csv.writer(fh); w.writerow(["atom", "energy"])
-            for s, v in vals.items(): w.writerow([s, f"{v:.12f}"])
-        print(f"\n  WROTE production {prod}  (column 'energy' = B3LYP {key})")
-        print(f"  {'atom':5s} {'old':>16s} {'new':>16s} {'diff(Eh)':>12s} {'diff(kcal/mol)':>15s}")
-        for s, v in vals.items():
-            o = old.get(s)
-            if o is None:
-                print(f"  {s:5s} {'(new)':>16s} {v:16.9f} {'':>12s} {'':>15s}")
-            else:
-                d = v - o
-                print(f"  {s:5s} {o:16.9f} {v:16.9f} {d:12.6f} {d*627.509474:15.2f}")
-        n_chg = sum(1 for s, v in vals.items()
-                    if s in old and abs(v - old[s]) * 627.509474 > 0.01)
-        print(f"\n  Elements whose value moved >0.01 kcal/mol: {n_chg}")
-        if n_chg == 0:
-            print("  => the 11 original entries reproduced EXACTLY; only Ge/Sn are new.")
-            print("     Existing Delta_G values stay valid; just re-run compute_deltaG.py")
-            print("     (+ compute_residual_deltaG.py) so Ge/Sn molecules stop erroring.")
+    rows = read_set(d)
+    if not rows:
+        raise SystemExit(f"no <El>_atom.out files in {d} -- has the job finished?")
+
+    # Only the production set is pinned to orca_settings; a legacy set is by
+    # definition at a different level of theory.
+    expect_kw = S.ATOM_REF if args.set == "production" else None
+    if expect_kw:
+        print(f"  expecting: {expect_kw}")
+
+    problems = report(args.set, rows, expect_kw)
+
+    out_csv = os.path.join(base, f"atom_ref_{args.set}.csv")
+    with open(out_csv, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["atom", "E_elec_Eh", "G_Eh", "mult", "ok", "keywords"])
+        for sym, r in rows:
+            ok = (r["converged"] and not r["scf_fail"]
+                  and r["E_elec_Eh"] is not None and r["G_Eh"] is not None)
+            w.writerow([sym, r["E_elec_Eh"], r["G_Eh"], int(r["mult"] or 0),
+                        "yes" if ok else "NO", r["keywords"] or ""])
+    print(f"\n  full table -> {out_csv}")
+
+    if not args.write_production:
+        return
+
+    if problems and not args.force:
+        print("\n  ABORT: not writing atom_ref.csv. Problems:")
+        for sym, bad, kw in problems:
+            print(f"    {sym:3s} {', '.join(bad)}")
+            if "keyword mismatch" in bad:
+                print(f"        found:    {kw}")
+                print(f"        expected: {expect_kw}")
+        print("  Fix the runs (or pass --force if you are certain).")
+        raise SystemExit(1)
+
+    key = "G_Eh" if args.use == "G" else "E_elec_Eh"
+    vals = {s: r[key] for s, r in rows}
+    if any(v is None for v in vals.values()):
+        raise SystemExit("\n  ABORT: some energies missing; not writing atom_ref.csv")
+
+    prod = os.path.join(here, "atom_ref.csv")
+    old = {}
+    if os.path.exists(prod):
+        with open(prod) as fh:
+            for row in csv.DictReader(fh):
+                old[row["atom"]] = float(row["energy"])
+        # Back up first: this file drives every molecule's Delta_G.
+        import shutil, time as _t
+        bak = prod + ".bak_" + _t.strftime("%Y%m%d_%H%M%S")
+        shutil.copy2(prod, bak)
+        print(f"\n  backed up old file -> {os.path.basename(bak)}")
+
+    with open(prod, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["atom", "energy"])
+        for s, v in sorted(vals.items()):
+            w.writerow([s, f"{v:.12f}"])
+
+    print(f"\n  WROTE {prod}")
+    print(f"  column 'energy' = {args.set} {key}")
+    print(f"  level of theory = {rows[0][1]['keywords']}")
+    print(f"\n  {'atom':5s} {'old':>18s} {'new':>18s} {'diff(Eh)':>12s} {'diff(kcal/mol)':>15s}")
+    for s, v in sorted(vals.items()):
+        o = old.get(s)
+        if o is None:
+            print(f"  {s:5s} {'(new)':>18s} {v:18.9f}")
         else:
-            print("  => WARNING: existing entries CHANGED. Every molecule's Delta_G shifts;")
-            print("     you must re-run compute_deltaG.py + compute_residual_deltaG.py")
-            print("     and retrain. Investigate before accepting.")
+            dd = v - o
+            print(f"  {s:5s} {o:18.9f} {v:18.9f} {dd:12.6f} {dd * HARTREE_KCAL:15.2f}")
+    moved = [s for s, v in vals.items()
+             if s in old and abs(v - old[s]) * HARTREE_KCAL > 0.01]
+    print(f"\n  Elements that moved >0.01 kcal/mol: {len(moved)}")
+    if moved:
+        print("  => Every molecule's Delta_G changes. The molecular dataset must be")
+        print("     recomputed at the same level of theory before this file is used:")
+        print("       scripts/extract_thermo.py -> compute_deltaG.py -> compute_residual_deltaG.py")
 
 
 if __name__ == "__main__":
