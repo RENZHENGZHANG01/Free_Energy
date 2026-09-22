@@ -1,7 +1,57 @@
 import os
+import sys
 import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import Descriptors
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import orca_settings as S
+
+
+def check_level_consistency(df, atom_ref_csv):
+    """Refuse to combine molecular and atomic energies from different methods.
+
+    Delta_G = G(molecule) - SUM n_i * G(atom_i) is a difference of ABSOLUTE
+    energies. If the two sides came from different functionals, basis sets or
+    grids, nothing cancels and every Delta_G is wrong by tens of kcal/mol per
+    atom -- with no symptom in the output. The 2026-09 switch from
+    B3LYP-D3BJ/def2-TZVP to wB97X-D3/def2-TZVP made that failure reachable by
+    simply re-running this script against an old thermo table, which is exactly
+    the kind of silent corruption worth one loud check.
+
+    extract_thermo.py writes a 'level' column holding the keyword line ORCA
+    echoed for each molecule. A table without that column predates the check and
+    cannot be verified, so it is refused unless ALLOW_UNVERIFIED_LEVEL=1.
+    """
+    expect = " ".join(S.FREQ.lower().split())
+
+    if "level" not in df.columns:
+        if os.environ.get("ALLOW_UNVERIFIED_LEVEL") == "1":
+            print("  WARNING: input has no 'level' column; level of theory NOT verified.")
+            return
+        raise SystemExit(
+            "\n  ABORT: the input thermo table has no 'level' column, so the level of\n"
+            "  theory it was computed at cannot be checked against the atomic\n"
+            f"  references in {atom_ref_csv}.\n\n"
+            f"  Expected: {S.FREQ}\n\n"
+            "  Regenerate it with the current extract_thermo.py, which records the\n"
+            "  level of theory per molecule:\n"
+            "      python scripts/extract_thermo.py --expect-level\n\n"
+            "  If you are certain the input predates that column AND was computed at\n"
+            "  the level above, set ALLOW_UNVERIFIED_LEVEL=1.")
+
+    found = sorted({" ".join(str(x).lower().split()) for x in df["level"].dropna()} - {""})
+    wrong = [lv for lv in found if lv != expect]
+    if wrong:
+        raise SystemExit(
+            "\n  ABORT: molecular energies and atomic references are at different\n"
+            "  levels of theory. Delta_G would be meaningless.\n\n"
+            f"  Expected: {S.FREQ}\n"
+            + "".join(f"  Found:    {lv}\n" for lv in wrong)
+            + "\n  Either recompute the molecules at the expected level, or point\n"
+              "  orca_settings.py at the level the molecules actually used and\n"
+              "  regenerate atom_ref.csv to match.")
+    print(f"  Level of theory verified: {S.FREQ}")
 
 # =========================================================
 # Utility Functions
@@ -78,6 +128,8 @@ def compute_deltaG():
 
     print("Reading input file:", input_csv)
     df = pd.read_csv(input_csv)
+
+    check_level_consistency(df, atom_ref_csv)
 
     print("Reading atom reference energy:", atom_ref_csv)
     atom_ref = pd.read_csv(atom_ref_csv)
